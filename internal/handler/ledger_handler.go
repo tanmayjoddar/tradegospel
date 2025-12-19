@@ -1,23 +1,22 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"ledger-go-system/internal/repository"
-
-	"github.com/prisma/prisma-client-go"
 )
 
 type LedgerHandler struct {
 	repo *repository.LedgerRepository
 }
 
-func NewLedgerHandler(client prisma.Client) *LedgerHandler {
+func NewLedgerHandler(db *sql.DB) *LedgerHandler {
 	return &LedgerHandler{
-		repo: repository.NewLedgerRepository(client),
+		repo: repository.NewLedgerRepository(db),
 	}
 }
 

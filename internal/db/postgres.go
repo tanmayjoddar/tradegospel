@@ -1,13 +1,11 @@
 package db
 
 import (
-	"github.com/prisma/prisma-client-go"
+	"database/sql"
+
+	_ "github.com/lib/pq"
 )
 
-func New() (prisma.Client, error) {
-	client := prisma.NewClient()
-	if err := client.Prisma.Connect(); err != nil {
-		return nil, err
-	}
-	return client, nil
+func New(dsn string) (*sql.DB, error) {
+	return sql.Open("postgres", dsn)
 }

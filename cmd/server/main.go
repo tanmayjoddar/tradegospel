@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
-	"github.com/prisma/prisma-client-go/runtime/httpclient"
 
 	"ledger-go-system/internal/db"
 	"ledger-go-system/internal/handler"
@@ -18,22 +17,23 @@ func main() {
 		log.Println("No .env file found, using environment variables")
 	}
 
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL not set")
+	}
+
 	port := os.Getenv("SERVER_PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	client, err := db.New()
+	conn, err := db.New(dsn)
 	if err != nil {
-		log.Fatalf("Failed to initialize Prisma client: %v", err)
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer func() {
-		if err := client.Disconnect(); err != nil {
-			log.Printf("Error disconnecting Prisma client: %v", err)
-		}
-	}()
+	defer conn.Close()
 
-	h := handler.NewLedgerHandler(client)
+	h := handler.NewLedgerHandler(conn)
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /ledger", middleware.Role("admin", http.HandlerFunc(h.Create)))
