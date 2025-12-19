@@ -13,6 +13,12 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+type RefreshClaims struct {
+	UserID int    `json:"user_id"`
+	Role   string `json:"role"`
+	jwt.RegisteredClaims
+}
+
 type AuthManager struct {
 	secretKey string
 }
@@ -27,12 +33,13 @@ func NewAuthManager(secretKey string) *AuthManager {
 	return &AuthManager{secretKey: secretKey}
 }
 
-// GenerateToken creates a JWT token for the given role
-func (am *AuthManager) GenerateToken(role string) (string, error) {
+// GenerateToken creates a JWT token for the given role with 1 hour expiration
+func (am *AuthManager) GenerateToken(role string, userID int) (string, error) {
 	claims := &Claims{
 		Role: role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			Subject:   fmt.Sprintf("%d", userID),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -41,6 +48,27 @@ func (am *AuthManager) GenerateToken(role string) (string, error) {
 	tokenString, err := token.SignedString([]byte(am.secretKey))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	return tokenString, nil
+}
+
+// GenerateRefreshToken creates a long-lived refresh token (7 days)
+func (am *AuthManager) GenerateRefreshToken(userID int, role string) (string, error) {
+	claims := &RefreshClaims{
+		UserID: userID,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   fmt.Sprintf("%d", userID),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(am.secretKey))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 
 	return tokenString, nil
@@ -67,7 +95,28 @@ func (am *AuthManager) VerifyToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// VerifyCredentials checks username and password
+// VerifyRefreshToken validates a refresh token
+func (am *AuthManager) VerifyRefreshToken(tokenString string) (*RefreshClaims, error) {
+	claims := &RefreshClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(am.secretKey), nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse refresh token: %w", err)
+	}
+
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid refresh token")
+	}
+
+	return claims, nil
+}
+
+// VerifyCredentials checks username and password (legacy support for hardcoded users)
 func VerifyCredentials(username, password string) (string, error) {
 	hashedPassword, exists := ValidUsers[username]
 	if !exists {

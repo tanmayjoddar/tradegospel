@@ -1,6 +1,6 @@
 # Ledger System - Immutable REST API
 
-A simple REST API with JWT authentication and role-based access control. Built to demonstrate immutability and security.
+A secure REST API with JWT authentication, refresh tokens, rate limiting, and database-stored credentials. Built to demonstrate immutability and production-grade security.
 
 ## Setup
 
@@ -22,7 +22,10 @@ cp .env.example .env
 ```env
 DATABASE_URL="postgresql://ledger_admin:admin_password@localhost:5432/ledger_db"
 SERVER_PORT=8080
-JWT_SECRET="your-secret-key"
+JWT_SECRET="your-super-secret-key-min-32-chars-change-production"
+# Optional: HTTPS
+# TLS_CERT="/path/to/cert.pem"
+# TLS_KEY="/path/to/key.pem"
 ```
 
 3. **Create database**
@@ -42,9 +45,9 @@ Server runs on `http://localhost:8080`
 
 ---
 
-## Authentication with JWT
+## Authentication with JWT & Refresh Tokens
 
-You need a **JWT token** to access all API endpoints.
+All API endpoints require authentication. Access tokens expire in 1 hour - use refresh tokens to get new ones without logging in again.
 
 ### Step 1: Login
 
@@ -75,7 +78,9 @@ curl -X POST http://localhost:8080/auth/login \
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "role": "admin"
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "role": "admin",
+  "expires_in": 3600
 }
 ```
 
@@ -87,12 +92,51 @@ curl -X POST http://localhost:8080/auth/login \
 }
 ```
 
-### Step 2: Use Token
+### Step 2: Use Access Token
 
-Add token to every request in the `Authorization` header:
+Add access token to every request:
 
 ```bash
--H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+-H "Authorization: Bearer <token>"
+```
+
+### Step 3: Refresh Token (When Expires)
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8080/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGci..."}'
+```
+
+**Request Body:**
+
+```json
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "role": "admin",
+  "message": "token refreshed successfully"
+}
+```
+
+### Step 4: Logout (Revoke Refresh Token)
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8080/auth/logout \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGci..."}'
 ```
 
 ---
@@ -209,7 +253,12 @@ TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "admin_password"}' | jq -r '.token')
 
-echo "Token: $TOKEN"
+REFRESH_TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin_password"}' | jq -r '.refresh_token')
+
+echo "Access Token: $TOKEN"
+echo "Refresh Token: $REFRESH_TOKEN"
 
 # 2. Create entry
 curl -X POST http://localhost:8080/ledger \
@@ -225,16 +274,23 @@ curl -X GET http://localhost:8080/ledger \
 curl -X GET http://localhost:8080/ledger/1 \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# 5. Login as viewer
+# 5. Refresh token (get new access token)
+NEW_TOKEN=$(curl -s -X POST http://localhost:8080/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d "{\"refresh_token\": \"$REFRESH_TOKEN\"}" | jq -r '.token')
+
+echo "New Access Token: $NEW_TOKEN"
+
+# 6. Login as viewer
 VIEWER_TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "viewer", "password": "viewer_password"}' | jq -r '.token')
 
-# 6. Viewer can read
+# 7. Viewer can read
 curl -X GET http://localhost:8080/ledger \
   -H "Authorization: Bearer $VIEWER_TOKEN" | jq
 
-# 7. Viewer CANNOT create (gets 403)
+# 8. Viewer CANNOT create (gets 403)
 curl -X POST http://localhost:8080/ledger \
   -H "Authorization: Bearer $VIEWER_TOKEN" \
   -H "Content-Type: application/json" \
@@ -245,12 +301,15 @@ curl -X POST http://localhost:8080/ledger \
 
 ## Features
 
-✅ JWT Authentication - Secure token-based auth
-✅ Role-Based Access - Admin creates, Viewer reads only
-✅ Immutable Ledger - No UPDATE/DELETE allowed
-✅ Audit Log - Track all INSERT operations
-✅ Bcrypt Passwords - Secure password storage
-✅ Database Protection - PostgreSQL enforces immutability
+✅ **JWT Authentication** - Secure token-based auth with 1-hour expiration
+✅ **Refresh Tokens** - 7-day refresh tokens for seamless UX (no repeated logins)
+✅ **Database Credentials** - User passwords stored securely in database with bcrypt
+✅ **Rate Limiting** - 60 requests per minute per IP to prevent abuse
+✅ **HTTPS Support** - Optional TLS/SSL configuration for production
+✅ **Role-Based Access** - Admin creates, Viewer reads only
+✅ **Immutable Ledger** - No UPDATE/DELETE allowed at app or DB level
+✅ **Audit Log** - Track all INSERT operations with actor and timestamp
+✅ **Bcrypt Passwords** - Secure password hashing and verification
 
 ---
 
@@ -265,9 +324,12 @@ curl -X POST http://localhost:8080/ledger \
 
 ### How It Works
 
-1. **JWT prevents role spoofing** - Viewer cannot claim to be admin (signature won't match)
-2. **Database prevents updates** - Even if app is compromised, DB blocks UPDATE/DELETE
-3. **Audit trail** - Every action is logged with who did it
+1. **JWT prevents role spoofing** - Viewer cannot claim to be admin (signature verification fails)
+2. **Bcrypt password hashing** - Passwords stored securely, never in plaintext
+3. **Database enforces immutability** - Even if app is compromised, DB blocks UPDATE/DELETE
+4. **Refresh token rotation** - Tokens stored in database with hash verification
+5. **Rate limiting** - Prevents brute force and DoS attacks
+6. **HTTPS ready** - TLS configuration available for encrypted communication
 
 ### Test Database Protection
 
@@ -309,6 +371,14 @@ psql -U ledger_admin -d ledger_db -c "DELETE FROM ledger WHERE id = 1;"
 }
 ```
 
+### Rate Limited
+
+```json
+{
+  "error": "rate limit exceeded - try again in 1 minute"
+}
+```
+
 ### Invalid Amount
 
 ```json
@@ -328,6 +398,43 @@ psql -U ledger_admin -d ledger_db -c "DELETE FROM ledger WHERE id = 1;"
 ---
 
 ## Database Schema
+
+### users table
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### refresh_tokens table
+
+```sql
+CREATE TABLE refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### rate_limit_log table
+
+```sql
+CREATE TABLE rate_limit_log (
+    id SERIAL PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    endpoint VARCHAR(255) NOT NULL,
+    request_count INTEGER DEFAULT 1,
+    window_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ip_address, endpoint, window_start)
+);
+```
 
 ### ledger table
 
@@ -352,38 +459,27 @@ CREATE TABLE audit_ledger (
 );
 ```
 
-### Roles
-
-```sql
--- Admin: Can INSERT and SELECT
-CREATE ROLE ledger_admin LOGIN PASSWORD 'admin_password';
-GRANT INSERT, SELECT ON ledger TO ledger_admin;
-
--- Viewer: Can only SELECT
-CREATE ROLE ledger_viewer LOGIN PASSWORD 'viewer_password';
-GRANT SELECT ON ledger TO ledger_viewer;
-
--- Both: Cannot UPDATE or DELETE
-REVOKE UPDATE, DELETE ON ledger FROM ledger_admin;
-REVOKE UPDATE, DELETE ON ledger FROM ledger_viewer;
-```
-
 ---
 
 ## Project Structure
 
 ```
 .
-├── cmd/server/main.go              - Server setup & routes
+├── cmd/server/main.go              - Server setup, TLS, rate limiting
 ├── internal/
-│   ├── auth/jwt.go                 - JWT & credentials
+│   ├── auth/
+│   │   ├── jwt.go                  - JWT & refresh token generation
+│   │   └── user_repository.go      - User & token database queries
 │   ├── handler/
 │   │   ├── auth_handler.go         - Login endpoint
-│   │   └── ledger_handler.go       - Ledger endpoints
-│   ├── middleware/role.go          - JWT verification
+│   │   ├── refresh_handler.go      - Token refresh & logout
+│   │   └── ledger_handler.go       - Ledger CRUD endpoints
+│   ├── middleware/
+│   │   ├── role.go                 - JWT verification & authorization
+│   │   └── rate_limit.go           - Request rate limiting
 │   ├── repository/ledger_repo.go   - Database queries
 │   └── db/postgres.go              - DB connection
-├── database/schema.sql             - Database setup
+├── database/schema.sql             - Database setup & users
 ├── .env.example                    - Environment variables
 └── go.mod                          - Go dependencies
 ```
@@ -403,8 +499,13 @@ REVOKE UPDATE, DELETE ON ledger FROM ledger_viewer;
 
 **"invalid or expired token"**
 
-- Token expires after 24 hours
-- Login again to get new token
+- Access token expires after 1 hour
+- Use refresh token to get a new one: `POST /auth/refresh`
+
+**"rate limit exceeded"**
+
+- Too many requests from this IP
+- Wait 1 minute and try again
 
 **"missing authorization header"**
 
@@ -412,18 +513,6 @@ REVOKE UPDATE, DELETE ON ledger FROM ledger_viewer;
 
 ---
 
-## Production Checklist
-
-- [ ] Change `JWT_SECRET` to strong random key
-- [ ] Use HTTPS only
-- [ ] Store passwords in real database
-- [ ] Implement refresh tokens
-- [ ] Add rate limiting
-- [ ] Enable PostgreSQL SSL
-- [ ] Setup backups
-- [ ] Add request logging
-
----
 
 ## How Immutability Works
 
@@ -435,4 +524,3 @@ REVOKE UPDATE, DELETE ON ledger FROM ledger_viewer;
 This is why immutability is enforced at two layers - if one fails, the other protects the data.
 
 ---
-
