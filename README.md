@@ -436,4 +436,3 @@ This is why immutability is enforced at two layers - if one fails, the other pro
 
 ---
 
-**See SETUP_GUIDE.md and DESIGN.md for more details**
