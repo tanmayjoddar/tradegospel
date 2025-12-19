@@ -1,0 +1,9 @@
+.env
+.env.local
+node_modules/
+dist/
+*.log
+.git/
+.DS_Store
+prisma/migrations/
+SETUP_GUIDE.md
