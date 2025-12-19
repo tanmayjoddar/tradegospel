@@ -8,58 +8,102 @@ import (
 
 	"ledger-go-system/internal/repository"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prisma/prisma-client-go"
 )
 
 type LedgerHandler struct {
 	repo *repository.LedgerRepository
 }
 
-func NewLedgerHandler(db *pgxpool.Pool) *LedgerHandler {
+func NewLedgerHandler(client prisma.Client) *LedgerHandler {
 	return &LedgerHandler{
-		repo: repository.NewLedgerRepository(db),
+		repo: repository.NewLedgerRepository(client),
 	}
 }
 
+type CreateRequest struct {
+	Amount      float64 `json:"amount"`
+	Description string  `json:"description"`
+}
+
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
 func (h *LedgerHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Amount      float64 `json:"amount"`
-		Description string  `json:"description"`
-	}
+	var body CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "invalid request body"})
 		return
 	}
 
-	if err := h.repo.Create(r.Context(), body.Amount, body.Description); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if body.Amount <= 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "amount must be positive"})
 		return
 	}
 
+	if body.Description == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "description is required"})
+		return
+	}
+
+	actor := r.Header.Get("X-Actor")
+	if actor == "" {
+		actor = r.Header.Get("Role")
+	}
+
+	if err := h.repo.Create(r.Context(), body.Amount, body.Description, actor); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *LedgerHandler) List(w http.ResponseWriter, r *http.Request) {
 	data, err := h.repo.List(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
 		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(data)
 }
 
 func (h *LedgerHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
-	id, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+	idStr := parts[len(parts)-1]
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "invalid ledger id"})
 		return
 	}
 
 	data, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "ledger entry not found"})
 		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(data)
 }
