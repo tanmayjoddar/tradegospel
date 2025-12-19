@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ledger-go-system/internal/middleware"
 	"ledger-go-system/internal/repository"
 )
 
@@ -52,9 +53,10 @@ func (h *LedgerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actor := r.Header.Get("X-Actor")
+	// Use the role from context (set by JWT middleware)
+	actor := middleware.GetRoleFromContext(r)
 	if actor == "" {
-		actor = r.Header.Get("Role")
+		actor = "unknown"
 	}
 
 	if err := h.repo.Create(r.Context(), body.Amount, body.Description, actor); err != nil {
