@@ -1,15 +1,13 @@
 package db
 
 import (
-	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prisma/prisma-client-go"
 )
 
-func New(dsn string) (*pgxpool.Pool, error) {
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
+func New() (prisma.Client, error) {
+	client := prisma.NewClient()
+	if err := client.Prisma.Connect(); err != nil {
 		return nil, err
 	}
-	return pgxpool.NewWithConfig(context.Background(), cfg)
+	return client, nil
 }
